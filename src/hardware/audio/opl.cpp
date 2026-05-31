@@ -5,6 +5,7 @@
 
 #include "private/gus.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -396,6 +397,13 @@ AudioFrame Opl::RenderFrame()
 		return frame;
 
 	} else { // OPL
+		// Benchmark instrumentation (not for merge): accumulate wall-time
+		// spent in the OPL render path and log it once per 5-second window.
+		// Portable clock so the same build compares on Windows and Linux.
+		static int64_t accumulated_ns = 0;
+		static int64_t next_log_ns    = 0;
+		const auto t_start = std::chrono::steady_clock::now();
+
 		OPL3_GenerateStream(&opl.chip, buf, 1);
 
 		if (ctrl.wants_dc_bias_removed) {
@@ -409,6 +417,23 @@ AudioFrame Opl::RenderFrame()
 		} else {
 			frame.left  = buf[0];
 			frame.right = buf[1];
+		}
+
+		const auto t_end = std::chrono::steady_clock::now();
+		accumulated_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+		                          t_end - t_start)
+		                          .count();
+		const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		                            t_end.time_since_epoch())
+		                            .count();
+		if (next_log_ns == 0) {
+			next_log_ns = now_ns + 5'000'000'000;
+		}
+		if (now_ns >= next_log_ns) {
+			LOG_ERR("OPL Duration: %lldms",
+			        static_cast<long long>(accumulated_ns / 1'000'000));
+			next_log_ns    = now_ns + 5'000'000'000;
+			accumulated_ns = 0;
 		}
 		return frame;
 	}
